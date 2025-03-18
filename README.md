@@ -39,6 +39,3 @@ This project investigates economic mobility trends across different regions in t
 - Collect more complete education-related data.
 - Improve model generalization for the Northeast region.
 - Explore non-linear models or machine learning approaches for better accuracy.
-
-## Repository Structure
-📂 Economic-Mobility-Analysis/ │── 📜 README.md │── 📂 data/ # Raw and processed datasets │── 📂 notebooks/R Markdown analysis files │── 📂 reports/ # PDF reports and visualizations 
