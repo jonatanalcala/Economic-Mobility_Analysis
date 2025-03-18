@@ -1,4 +1,4 @@
-# Economic-Mobility_Analysis
+# Economic-Mobility-Analysis
 
 ## Project Overview
 
