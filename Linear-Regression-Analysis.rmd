@@ -1,0 +1,519 @@
+---
+title: "LM Model Creation"
+author: "Andrew Mendez"
+date: "2025-02-10"
+output:
+  pdf_document: default
+  word_document: default
+---
+
+# Intro
+
+We as a team were tasked with investigating economic mobility across decades within the united states. By looking at variables linked to social climate, economic prosperity, government policy, and education we were able to create a linear model but before we were able too create this model we had to perform essential exploratory data analysis. We were looking for variables that either with or without transformation met the assumptions necessary to build a linear model. This was a struggle for some variables due to their lack of information or more explicitly high amounts of NA values, these were mainly in the education based columns and none seemed to be a good fit for a linear model. We then used the variables we found best fit our linear model assumptions and used a stepwise method of variable selection comparing models based on their AIC. Lastly we compared how are model fared across regions and ultimately selected our best model. Using this model and what it deems to be good predictors of social mobility we hope to support government policy that will benefit our nation.
+
+# Overview of EDA
+
+## Bi-Variate analysis
+
+Table 1 describes the Bi-Variate relationship between all numerical predictor variables to Mobility. This also include all relevant transformation to see if the predictor variable can represent a better linear relationship Mobility. The R² highlighted in red show the best value between all the transformations. To note NA values for transformations mean they were not applicable to the variable
+
+### Results
+
+There are 4 values (Single Mothers, Commute, Gini, Black) have a R² of 0.30 or higher. These show Moderate to High correlations to Mobility.
+
+Higher single motherhood rates correlate with lower mobility due to reduced household stability and fewer financial and educational resources for children. Commute times impact mobility because shorter commutes indicate better access to jobs, schools, and infrastructure, fostering economic opportunity. Income inequality (Gini coefficient) limits upward mobility as greater wealth gaps reduce access to quality education and social support systems. Lastly, the percentage of Black residents is associated with lower mobility due to systemic disparities, historical wealth gaps, and limited access to high-quality schools and job markets. These factors collectively shape economic opportunity and social mobility.
+
+## Multi-Variate analysis
+
+Table 2 describes Multi-Variate relationship between all numerical predictor variables to Mobility. This also includes the VIF scores to check for colinearity. The Graphs are then for multiple ways of check for heteroscedasticity
+
+### Results
+
+Looking alone at every variable there appears to be high colinearity between a lot of these variables, specifically around (Gini, Seg Affluence, Share 1%, Gini 99%, Seg Income, Seg Poverty). Since a lot of these variables don't follow the linear assumptions it would be better to cross a lot of these ones out in the final model.
+
+Looking at the graphs it does show there is some heteroscedasticity happening here. Q-Q graph is not showing a constant straight line due to some outliers. Scale-Location appears also not to be a flat line either due to high residual high fitted values. This will be taken into account when model building.
+
+One Theory due to high VIF scores on some variables is due to all of them sharing the common characteristic in that they relate to social groups. In that Gini is probably the best in explain the differences between social groups and all the other ones relate to Gini too.
+
+## NA Values EDA / Results
+
+It appears that there is in fact a pattern in NA values. It appears that there's a lot more missing values in education related variables. Due to this and the high variance this will cause we will not be considering Education Varibales in the final model
+
+```{r, echo=FALSE, results="hide", message=FALSE, error=FALSE, warning=FALSE}
+library(readr)
+library(dplyr)
+library(MASS)
+library(ggplot2)
+library(car)
+library(glmnet)
+library(caret)
+library(knitr)
+library(kableExtra)
+library(tibble)
+library(naniar)
+```
+
+```{r, echo=FALSE, results='asis'}
+# Load data
+mobility_all = read.csv("mobility-all.csv")
+
+mobility_all_imputed <- mobility_all  
+
+# Identify numeric columns
+numeric_cols <- sapply(mobility_all, is.numeric)
+
+# Impute missing values with the column mean only for numeric columns
+mobility_all_imputed[numeric_cols] <- lapply(mobility_all[numeric_cols], function(x) {
+  ifelse(is.na(x), mean(x, na.rm = TRUE), x)
+})
+
+# Identify numeric columns
+numeric_cols <- sapply(mobility_all, is.numeric)
+data_numeric <- mobility_all[, numeric_cols]
+
+# Impute missing values with the mean of each column
+data_numeric <- data_numeric %>%
+    mutate(across(everything(), ~ ifelse(is.na(.), mean(., na.rm = TRUE), .)))
+
+
+# Define the target variable and predictors
+target_variable <- colnames(data_numeric)[2]  # Use the second column as the target
+predictors <- colnames(data_numeric)[-2]  # Use all other columns as predictors
+
+
+importance_list <- list()
+
+# Perform bivariate regression and compute correlation for each predictor with transformations
+for (predictor in predictors) {
+    # Ensure predictor has multiple unique values
+    if (length(unique(data_numeric[[predictor]])) > 1) {
+        
+        formula <- as.formula(paste(target_variable, "~", predictor))
+        model <- lm(formula, data = data_numeric)
+        
+        # Extract R-squared value for original predictor
+        r_squared <- summary(model)$r.squared  
+
+        # Compute Pearson correlation
+        correlation <- cor(data_numeric[[predictor]], data_numeric[[target_variable]], use = "complete.obs")
+
+        # Extract p-value
+        p_value <- summary(model)$coefficients[2, 4]
+
+        # Initialize transformed R² values
+        log_r_squared <- sqrt_r_squared <- squared_r_squared <- cuberoot_r_squared <- reciprocal_r_squared <- NA
+
+        # Log Transformation (only for positive values)
+        if (all(data_numeric[[predictor]] > 0, na.rm = TRUE)) {
+            log_values <- log(data_numeric[[predictor]])
+            if (length(unique(log_values)) > 1) {  # Ensure transformed variable is not constant
+                log_model <- lm(data_numeric[[target_variable]] ~ log_values)
+                log_r_squared <- summary(log_model)$r.squared
+            }
+        }
+
+        # Square Root Transformation (only for non-negative values)
+        if (all(data_numeric[[predictor]] >= 0, na.rm = TRUE)) {
+            sqrt_values <- sqrt(data_numeric[[predictor]])
+            if (length(unique(sqrt_values)) > 1) {
+                sqrt_model <- lm(data_numeric[[target_variable]] ~ sqrt_values)
+                sqrt_r_squared <- summary(sqrt_model)$r.squared
+            }
+        }
+
+        # Squaring (X²) Transformation
+        squared_values <- data_numeric[[predictor]]^2
+        if (length(unique(squared_values)) > 1) {
+            squared_model <- lm(data_numeric[[target_variable]] ~ squared_values)
+            squared_r_squared <- summary(squared_model)$r.squared
+        }
+
+        # Cube Root Transformation (valid for any real number)
+        cuberoot_values <- data_numeric[[predictor]]^(1/3)
+        if (length(unique(cuberoot_values)) > 1) {
+            cuberoot_model <- lm(data_numeric[[target_variable]] ~ cuberoot_values)
+            cuberoot_r_squared <- summary(cuberoot_model)$r.squared
+        }
+
+        # Reciprocal (1/X) Transformation (only if no zeros)
+        if (all(data_numeric[[predictor]] != 0, na.rm = TRUE)) {
+            reciprocal_values <- 1 / data_numeric[[predictor]]
+            if (length(unique(reciprocal_values)) > 1) {
+                reciprocal_model <- lm(data_numeric[[target_variable]] ~ reciprocal_values)
+                reciprocal_r_squared <- summary(reciprocal_model)$r.squared
+            }
+        }
+
+        # Store results in a list
+        importance_list[[predictor]] <- data.frame(
+            Correlation = round(correlation, 4),  # Pearson Correlation
+            P_Value = round(p_value, 4),  # Extract and round p-value
+            R_Squared = round(r_squared, 4),  # R² for original predictor
+            Log_R_Squared = round(log_r_squared, 4),  # R² for log-transformed predictor
+            Sqrt_R_Squared = round(sqrt_r_squared, 4),  # R² for square root transformation
+            Squared_R_Squared = round(squared_r_squared, 4),  # R² for squared transformation
+            Cuberoot_R_Squared = round(cuberoot_r_squared, 4),  # R² for cube root transformation
+            Reciprocal_R_Squared = round(reciprocal_r_squared, 4)  # R² for reciprocal transformation
+        )
+    }
+}
+
+
+# Combine results into a single dataframe
+importance_bivariate <- do.call(rbind, importance_list)
+
+# Sort by R-squared (original predictor) in descending order
+importance_bivariate <- importance_bivariate[
+    order(importance_bivariate$R_Squared, decreasing = TRUE), 
+]
+
+formatted_colnames <- c(
+  "Predictor",
+  "Correlation",
+  "P-Val",
+  "R\nSquared",
+  "RSquared\nLog",
+  "RSquared\nSqrt",
+  "RSquared\nSquared",
+  "RSquared\nCuberoot",
+  "RSquared\nReciporcal"
+)
+
+# Ensure the number of column names matches the number of columns
+
+importance_bivariate <- rownames_to_column(importance_bivariate, var = "Index")
+
+importance_bivariate$Index <- gsub("_", "\n", importance_bivariate$Index)
+
+colnames(importance_bivariate) <- formatted_colnames
+
+model_test = importance_bivariate
+
+# Convert R² columns to numeric for correct comparisons
+importance_bivariate <- importance_bivariate %>%
+  mutate(across(starts_with("R"), ~ as.numeric(as.character(.)))) 
+
+# Apply row-wise formatting while handling NA values safely
+importance_bivariate <- importance_bivariate %>%
+  rowwise() %>%
+  mutate(
+    across(starts_with("R"), 
+           ~ ifelse(
+              !is.na(.),  # Only apply formatting if NOT NA
+              cell_spec(., format = "latex",
+                        color = ifelse(. == max(c_across(starts_with("R")), na.rm = TRUE), 
+                                       "red", "black")),
+              NA)  # Keep NA values unchanged
+    )
+  ) %>%
+  ungroup()
+
+# Generate the formatted LaTeX table
+kable(importance_bivariate, format = "latex", booktabs = TRUE, col.names = formatted_colnames, caption = "Bivariate Importance Analysis", escape = FALSE) %>%
+  kable_styling(
+    full_width = FALSE, 
+    font_size = 10, 
+    latex_options = c("striped", "HOLD_position", "scale_down"), 
+    position = "center"
+  ) %>%
+  row_spec(0, bold = FALSE, font_size = 10) %>%  
+  column_spec(2:ncol(importance_bivariate), width = "1.25cm")  
+```
+
+```{r, echo=FALSE, results="hide", message=FALSE, error=FALSE, warning=FALSE}
+state_region_abbr <- data.frame(
+  State = c("AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
+                 "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
+                 "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
+                 "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
+                 "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY"),
+  region = c("South", "West", "West", "South", "West", "West", "Northeast", 
+             "Northeast", "South", "South", "West", "West", "Midwest", 
+             "Midwest", "Midwest", "Midwest", "South", "South", "Northeast", 
+             "Northeast", "Northeast", "Midwest", "Midwest", "South", 
+             "Midwest", "West", "Midwest", "West", "Northeast", "South", 
+             "West", "Northeast", "South", "Midwest", "South", "West", 
+             "South", "South", "West", "Northeast", "South", "West", 
+             "Northeast", "Midwest", "Midwest", "West", "West", "South", 
+             "Midwest", "Midwest")  # Fixed to 50 elements
+)
+# Merge the region data into the mobility dataset based on the "State" column
+mobility_all_imputed <- merge(mobility_all_imputed, state_region_abbr, by = "State", all.x = TRUE)
+
+
+```
+
+```{r, echo=FALSE, results='asis', warning=FALSE}
+# Refit the model with only significant predictors (p < 0.05)
+final_model <- lm(Mobility ~ .- State - ID - Name, data = mobility_all)
+
+# Display summary of the refined model
+model_summary <- summary(final_model)
+
+model_df <- as.data.frame(model_summary$coefficients)
+
+colnames(model_df) <- c("Estimate", "Std. Error", "T-value", "pvalue")
+
+
+vif_scores <- vif(final_model)
+vif_df <- data.frame(Variable = names(vif_scores), VIF = vif_scores)
+model_df$Variable <- rownames(model_df)
+
+model_df <- merge(model_df, vif_df, by = "Variable", all.x = TRUE)
+
+model_df <- model_df[, c("Variable", "Estimate", "Std. Error", "T-value", "pvalue", "VIF")]
+
+model_df <- model_df[
+    order(model_df$pvalue, decreasing = TRUE), 
+]
+colnames(model_df) <- c("Predictor", "Estimate", "Std. Error", "T-value", "P-value", "VIF")
+
+# # Ensure LaTeX-safe formatting by escaping special characters
+# model_df <- model_df %>%
+#   mutate_all(~ gsub("_", "\\_", ., fixed = TRUE))  # Escape underscores if needed
+
+kable(model_df, format = "latex", booktabs = TRUE, caption = "Multivarite Summary Analysis", row.names = FALSE) %>%
+  kable_styling(latex_options = c("scale_down", "striped", "HOLD_position")) %>%
+  row_spec(0, bold = FALSE, font_size = 10) %>%  
+  column_spec(2:ncol(model_df), width = "1.75cm") 
+
+
+
+
+par(mfrow = c(2,2), oma = c(0, 0, 2, 0))
+plot(final_model, main = "Diagnostic Graphs Based on Table 2")
+```
+
+```{r, echo=FALSE}
+gg_miss_var(mobility_all) +
+  ggtitle("Missing Data by Variable") +  # Add title
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 12, face = "bold"),  # Center and style title
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 12),  # Rotate and adjust x-axis labels
+    axis.text.y = element_text(size = 7),  # Increase y-axis text size
+    panel.grid.major.y = element_blank(),  # Remove horizontal gridlines
+    panel.grid.minor = element_blank()
+  ) +
+  scale_x_discrete(expand = expansion(mult = c(.00001, .00001)))  # Increase spacing between variables
+
+```
+
+
+## Final Results
+
+The strongest predictors of economic mobility, after applying transformations, are Single Motherhood (R² = 0.5236, Reciprocal), Black Population (R² = 0.3587, Cube-root), Commute (R² = 0.3315, Raw), Gini (R² = 0.3078, Reciprocal), and Middle Class (R² = 0.285, Squared). These variables consistently show strong relationships with mobility. Education-related factors (Test Scores, School Spending, Dropout Rate) remain weak predictors even after transformation, suggesting they play an indirect role rather than a primary one. Segregation measures (racial and income) negatively impact mobility, with transformations improving their explanatory power slightly. Government policy variables (Local Tax Rate, EITC, Spending) remain weak predictors, even with transformation, indicating that broader structural factors may have a greater influence on mobility than direct fiscal interventions. The results suggest that family structure, income inequality, and segregation play key roles in determining economic mobility, while education and policy interventions likely act as secondary influences.
+
+# Model Creation
+
+## Choosing Varibales
+
+Criteria for our model require linear assumptions (Bi-Variate R² needs to be higher the 0.30), Co-Linearity has to be satisfied (VIF \< 5), and heteroscedasticity has to me minimized to its max. Further we will be testing performance of model using a 20/80 test train split, and utilizing a StepAIC function to automate for our best model.
+
+```{r, echo=FALSE}
+# Set a random seed for reproducibility
+set.seed(123)
+
+data_numeric$region <- mobility_all_imputed$region
+
+# Split the data: 80% train, 20% test
+train_index <- createDataPartition(data_numeric$Mobility, p = 0.8, list = FALSE)
+train_data <- data_numeric[train_index, ]
+test_data <- data_numeric[-train_index, ]
+
+# Get the IDs of influential points
+influential_ids <- c(1201, 3002, 10301, 11202, 11304, 19400, 19500, 20402, 26202, 26204, 26302, 
+                     26403, 26404, 26410, 26411, 26412, 26804, 27201, 27605, 27704, 29008, 29202, 
+                     30605, 31304, 31401, 31402, 31403, 31404, 34102, 34103, 34104, 34105, 34106, 
+                     34109, 34110, 34112, 34202, 34305, 34306, 34602, 36200, 37500, 37800)
+
+
+# Remove these IDs from train_data
+train_data <- train_data[!train_data$ID %in% influential_ids, ]
+
+
+
+
+# Fit the model using the training set
+full_model <- lm(log(Mobility / (1 - Mobility)) ~
+                   I(1/Single_mothers) +
+                   Commute +
+                   I(Middle_class^2) +
+                   I(1/Gini),
+                 data = train_data)
+
+# Stepwise AIC Backward Selection
+final_model <- stepAIC(full_model, direction = "backward", trace = FALSE)
+
+# Get model summary
+model_summary <- summary(final_model)
+
+# Extract coefficients
+coefficients_df <- data.frame(
+  Predictor = rownames(model_summary$coefficients),
+  Estimate = model_summary$coefficients[, 1],
+  Std_Error = model_summary$coefficients[, 2],
+  t_value = model_summary$coefficients[, 3],
+  P_value = model_summary$coefficients[, 4]
+)
+
+# Extract VIF values
+vif_values <- vif(final_model)
+vif_df <- data.frame(
+  Predictor = names(vif_values),
+  VIF = vif_values
+)
+
+# Merge VIF values with coefficients data
+model_results_df <- left_join(coefficients_df, vif_df, by = "Predictor")
+
+# Predict on test data (log-odds scale)
+test_predictions <- predict(final_model, newdata = test_data)
+
+# Convert log-odds predictions back to probability scale
+test_predictions <- exp(test_predictions) / (1 + exp(test_predictions))
+
+# Compute Evaluation Metrics
+actuals <- test_data$Mobility
+residuals <- actuals - test_predictions
+
+# Compute R-squared, RMSE, and MAE
+r_squared <- cor(actuals, test_predictions, use = "complete.obs")^2  # Ensure no missing values
+rmse <- sqrt(mean(residuals^2, na.rm = TRUE))
+mae <- mean(abs(residuals), na.rm = TRUE)
+
+# Compute Adjusted R-squared
+train_adj_r_squared <- model_summary$adj.r.squared
+
+# Create test performance data frame
+test_performance_df <- data.frame(
+  Metric = c("Train Adjusted R-squared", "Test R-squared", "Test RMSE", "Test MAE"),
+  Value = c(train_adj_r_squared, r_squared, rmse, mae)
+)
+
+# Generate LaTeX tables for model results and test performance
+kable(model_results_df, format = "latex", booktabs = TRUE, caption = "Overall Data Model Summary Stats", row.names = FALSE) %>%
+  kable_styling(latex_options = c("scale_down", "striped", "HOLD_position")) %>%
+  row_spec(0, bold = FALSE, font_size = 10) %>%  
+  column_spec(2:ncol(model_results_df), width = "1.75cm") 
+
+kable(test_performance_df, format = "latex", booktabs = TRUE, caption = "Overall Data Model Performance on Train and Test Data", row.names = FALSE) %>%
+  kable_styling(latex_options = c("scale_down", "striped", "HOLD_position")) %>%
+  row_spec(0, bold = FALSE, font_size = 10) %>%  
+  column_spec(2:ncol(test_performance_df), width = "1.75cm") 
+
+# Diagnostic Plots
+par(mfrow = c(2,2))
+plot(final_model)
+```
+
+## Model Creation Results
+
+The Best Model that we created had three variables (Single Mothers, Commute, Middle Class). Further transformations made on these variables were the reciprocal of Single Mothers, and the square of Middle Class. We also took the Log Odd of Mobility to normalize the Mobility values and improve our heteroscedasticity.
+
+Extra choices we made were to impute to the mean on NA values since the NA values were low in these variables and we did not want to get rid of entire observations. 
+
+Addressing heteroscedasticity it has been minimized successfully and all plots across the board appear to be good looking. To Produce these plots all variables with a cooks distance greater than 4 were removed to achieve these results. 
+
+# Testing Model on Regions
+
+Here we then used the same model that was trained on all 80% of the train data. we then partitioned the test data out to be more granular down to each region. We then ran the model to see what its performance was on individual regions. 
+
+```{r, echo=FALSE}
+# -------------------------------------------------------
+# Get the single (global) train Adjusted R² from final_model
+# -------------------------------------------------------
+global_adj_r2 <- summary(final_model)$adj.r.squared
+
+# -------------------------------------------------------
+# 1) Only consider regions that actually appear in the test_data
+# -------------------------------------------------------
+test_data$region <- as.factor(test_data$region)
+regions_in_test <- unique(test_data$region)
+
+# -------------------------------------------------------
+# 2) Create an empty data frame for results
+# -------------------------------------------------------
+test_results_df <- data.frame(
+  Region           = character(),
+  Num_Data_Points  = numeric(),
+  Train_Adj_R2     = numeric(),
+  Test_R2          = numeric(),
+  Test_RMSE        = numeric(),
+  Test_MAE         = numeric(),
+  stringsAsFactors = FALSE
+)
+
+# -------------------------------------------------------
+# 3) Loop over regions from the TEST set only
+# -------------------------------------------------------
+for (reg in regions_in_test) {
+
+  # Subset the TEST data for this region
+  region_data <- subset(test_data, region == reg)
+
+  # If no rows or only 1 row, skip
+  if (nrow(region_data) < 2) {
+    next
+  }
+
+  # # Predict using the *global* final_model
+  # test_predictions <- predict(final_model, newdata = region_data)
+
+  # Predict on test data (log-odds scale)
+  test_predictions <- predict(final_model, newdata = region_data)
+  
+  # Convert log-odds predictions back to probability scale
+  test_predictions <- exp(test_predictions) / (1 + exp(test_predictions))
+  
+  # The actual Mobility
+  actuals <- region_data$Mobility
+
+  # Safety check in case of mismatch
+  if (length(actuals) != length(test_predictions)) {
+    cat("Skipping region", reg, "- mismatch in predictions vs. actuals.\n")
+    next
+  }
+
+  # Calculate residuals
+  residuals <- actuals - test_predictions
+
+  # Compute correlation-based R², RMSE, and MAE on the scale of your predictions
+  test_r_squared <- cor(actuals, test_predictions)^2
+  test_rmse <- sqrt(mean(residuals^2, na.rm = TRUE))
+  test_mae  <- mean(abs(residuals), na.rm = TRUE)
+
+  # Append a new row to the results data frame
+  test_results_df <- rbind(
+    test_results_df,
+    data.frame(
+      Region          = reg,
+      Num_DP = nrow(region_data),
+      Test_R2         = test_r_squared,
+      Test_RMSE       = test_rmse,
+      Test_MAE        = test_mae
+    )
+  )
+}
+
+# -------------------------------------------------------
+# 4) Show the results
+# -------------------------------------------------------
+kable(
+  test_results_df,
+  format = "latex",
+  booktabs = TRUE,
+  caption = "Region-by-Region Performance (Test Set Only)",
+  row.names = FALSE
+) %>%
+  kable_styling(latex_options = c("scale_down", "striped", "HOLD_position")) %>%
+  row_spec(0, bold = FALSE, font_size = 10) %>%
+  column_spec(2:ncol(test_results_df), width = "2.5cm")
+```
+
+## Regions Results
+
+Based on the results it seems the model is doing alright in generalizing the data to all regions except for specifically the Northeast. The reason for this is probably due to low amounts of data points in Northeast causing there to be too much variance. Otherwise this model is pretty good at its prediction. 
+
+# Key Takeaways & Recommendations
+
+Based on our analysis, the data indicate that family structure (captured by the reciprocal of Single Mothers), commute times, and the strength of the middle class (using its squared transformation) are significant determinants of economic mobility. Our final model, which explains roughly 70% of the variability in mobility, shows that higher rates of single motherhood and greater income inequality are associated with reduced mobility, while shorter commute times and a robust middle class are linked to improved mobility. If more complete data were available for education-related factors, these variables might have contributed more strongly to the model; however, their high rate of missingness forced us to exclude them to avoid inflating variance. Similarly, while the model performs well overall, the lower predictive power observed in the Northeast—likely due to a smaller sample size—suggests that conclusions for that region should be interpreted with caution. In other words, if additional data were collected in underrepresented regions, the model’s recommendations might be refined further. Overall, the evidence supports policy interventions that focus on enhancing family support systems, reducing income disparities, and improving transportation infrastructure to foster economic mobility. These conclusions are drawn as precisely as the current data allow, yet we acknowledge that further refinement of the model and data improvements could adjust these recommendations.
