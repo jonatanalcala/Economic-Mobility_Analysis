@@ -1,6 +1,6 @@
 ---
 title: "LM Model Creation"
-author: "Andrew Mendez"
+author: "Jonatan Alcala"
 date: "2025-02-10"
 output:
   pdf_document: default
